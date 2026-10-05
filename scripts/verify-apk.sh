@@ -56,14 +56,28 @@ echo "--- manifest sanity ---"
 BADGING=""
 if command -v aapt >/dev/null 2>&1; then
   BADGING="$(aapt dump badging "$APK")"
+  echo "(using aapt)"
 elif command -v aapt2 >/dev/null 2>&1; then
   BADGING="$(aapt2 dump badging "$APK")"
+  echo "(using aapt2)"
 else
-  echo "(aapt not available; skipping manifest dump)"
+  echo "(no aapt on PATH; trying the SDK build-tools copy)"
+  candidate=""
+  for candidate in "${ANDROID_HOME:-}/build-tools"/*/aapt \
+                   "${ANDROID_SDK_ROOT:-}/build-tools"/*/aapt; do
+    if [ -x "$candidate" ]; then
+      BADGING="$("$candidate" dump badging "$APK")"
+      echo "(using $candidate)"
+      break
+    fi
+  done
 fi
 
 if [ -n "$BADGING" ]; then
-  printf '%s\n' "$BADGING" | head -5
+  # Print the lines that matter for a TV build, so the log shows what was checked
+  # rather than only the assertions that follow.
+  printf '%s\n' "$BADGING" | grep -E '^(package|launchable-activity|leanback-launchable-activity|uses-feature)' || true
+  
   echo
   echo "--- Android TV eligibility ---"
   # A TV box can install the APK but never launch it unless the manifest carries
@@ -74,9 +88,14 @@ if [ -n "$BADGING" ]; then
     echo "::error::no leanback launcher in the APK; Android TV devices cannot launch it"
     exit 1
   fi
-  if printf '%s\n' "$BADGING" | grep -q 'touchscreen'; then
+  if printf '%s\n' "$BADGING" | grep -qE "uses-feature: name='android.hardware.touchscreen'"; then
     echo "::warning::the APK still declares a required touchscreen; TV installs may be blocked"
+  else
+    echo "OK: touchscreen is not required"
   fi
+else
+  echo "::warning::aapt unavailable, so the leanback launcher could not be verified"
+  echo "::warning::install the APK on a TV to confirm it appears in the launcher"
 fi
 
 if ! unzip -p "$APK" AndroidManifest.xml >/dev/null 2>&1; then
