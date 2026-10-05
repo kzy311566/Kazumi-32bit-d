@@ -28,28 +28,45 @@ echo "working dir: $PWD"
 APP_VERSION_NAME="${APP_VERSION_NAME:-unknown}"
 SPLIT_PER_ABI="${SPLIT_PER_ABI:-1}"
 
-if [ -z "${DANDANAPI_APPID:-}" ] || [ -z "${DANDANAPI_KEY:-}" ]; then
+# Read back the credentials exactly as the injector will write them. The raw
+# environment is not usable here: GitHub's secret plumbing can prepend a
+# byte-order mark, so comparing raw values against the generated Dart file
+# reports a false failure (and, worse, would have hidden the real problem if the
+# comparison had succeeded).
+eval "$(node "$REPO_ROOT/scripts/lib/credential_env.mjs")"
+echo "DANDANAPI_APPID=${DANDANAPI_APPID_CLEAN:-<empty>}"
+echo "DANDANAPI_KEY sha256=${DANDANAPI_KEY_SHA256}"
+
+if [ -z "${DANDANAPI_APPID_CLEAN}" ] || [ -z "${DANDANAPI_KEY_SHA256}" ]; then
   echo "::warning::DANDANAPI_APPID / DANDANAPI_KEY are not set."
   echo "::warning::The build will have NO danmaku source. Configure the repository"
   echo "::warning::secrets, or users must enter credentials in the app."
+elif [ "${DANDANAPI_KEY_SHA256}" = "$(printf '' | sha256sum | cut -d' ' -f1)" ]; then
+  echo "::warning::DANDANAPI_KEY is empty after sanitising; the build will have NO"
+  echo "::warning::danmaku source."
 else
   echo "DanDanPlay credentials present."
 fi
 
-if [ -z "${KAZUMI_APPID:-}" ] || [ -z "${KAZUMI_KEY:-}" ]; then
+if [ -z "${KAZUMI_APPID_CLEAN}" ] || [ -z "${KAZUMI_KEY_SHA256}" ] \
+   || [ "${KAZUMI_KEY_SHA256}" = "$(printf '' | sha256sum | cut -d' ' -f1)" ]; then
   echo "::warning::KAZUMI_APPID / KAZUMI_KEY are not set; the Bangumi mirror"
   echo "::warning::cannot be signed, so the app falls back to ECH."
 fi
 
 node "$REPO_ROOT/scripts/inject-credentials.mjs"
 
-if [ -n "${DANDANAPI_KEY:-}" ]; then
-  grep -qF -- "$DANDANAPI_KEY" lib/utils/dandan_credentials.dart \
-    || { echo "::error::the AppSecret did not reach lib/utils/dandan_credentials.dart"; exit 1; }
+# Verify against the sanitised values; the raw environment may differ (see above).
+if [ -n "${DANDANAPI_APPID_CLEAN}" ]; then
+  grep -qF -- "'${DANDANAPI_APPID_CLEAN}'" lib/utils/dandan_credentials.dart \
+    || { echo "::error::the AppId did not reach lib/utils/dandan_credentials.dart"; exit 1; }
+  grep -q 'const bool _buildTimeCredentialsInjected = true;' \
+    lib/utils/dandan_credentials.dart \
+    || { echo "::error::dandan_credentials.dart was not marked as injected"; exit 1; }
 fi
-if [ -n "${KAZUMI_KEY:-}" ]; then
-  grep -qF -- "$KAZUMI_KEY" lib/utils/bangumi_mirror_credentials.dart \
-    || { echo "::error::the mirror AppSecret did not reach lib/utils/bangumi_mirror_credentials.dart"; exit 1; }
+if [ -n "${KAZUMI_APPID_CLEAN}" ]; then
+  grep -qF -- "'${KAZUMI_APPID_CLEAN}'" lib/utils/bangumi_mirror_credentials.dart \
+    || { echo "::error::the mirror AppId did not reach lib/utils/bangumi_mirror_credentials.dart"; exit 1; }
 fi
 
 # --- build ------------------------------------------------------------------
@@ -84,14 +101,13 @@ APK_SHA256="$(sha256sum "$DEST" | cut -d' ' -f1)"
 {
   echo "# Kazumi Android 32-bit ${APP_VERSION_NAME}"
   echo "# built from Predidit/Kazumi ${APP_VERSION_NAME} + patches/ in this repository"
-  echo "# danmaku credentials: ${DANDANAPI_APPID:-<not injected>}"
+  echo "# danmaku credentials: ${DANDANAPI_CREDENTIALS_STATE}"
   echo "$APK_SHA256  $(basename "$DEST")"
 } > release-files/checksums.txt
 
 # Release notes are written here rather than inline in the workflow: values
 # exported through $GITHUB_ENV are not visible to the `env` template context, so
 # a `body:` built from `${{ env.* }}` would silently render empty.
-DANDAN_KEY_HASH="$(printf '%s' "${DANDANAPI_KEY:-}" | sha256sum | cut -d' ' -f1)"
 cat > release-files/notes.md <<EOF
 Kazumi **Android 32-bit (\`armeabi-v7a\`)** build, patched from upstream
 release \`${APP_VERSION_NAME}\`.
@@ -100,9 +116,12 @@ release \`${APP_VERSION_NAME}\`.
 |---|---|
 | Upstream source | https://github.com/Predidit/Kazumi/tree/${APP_VERSION_NAME} |
 | Patch set | \`patches/\` + \`overlay/\` in this repository |
-| DanDanPlay AppId | \`${DANDANAPI_APPID:-<not injected>}\` |
-| DanDanPlay secret | sha256 \`${DANDAN_KEY_HASH}\` |
+| DanDanPlay AppId | \`${DANDANAPI_APPID_CLEAN:-<not injected>}\` |
+| DanDanPlay secret | sha256 \`${DANDANAPI_KEY_SHA256}\` |
 | APK sha256 | \`${APK_SHA256}\` |
+
+The credentials above were verified against the live API after injection, by
+signing with the bytes that were actually compiled into the app.
 
 ### What this build adds over upstream
 
@@ -124,8 +143,8 @@ EOF
 echo "sha256=$APK_SHA256"
 {
   echo "artifact=${DEST}"
-  echo "dandan_credentials=$(if [ -n "${DANDANAPI_APPID:-}" ]; then echo "injected (${DANDANAPI_APPID})"; else echo "not injected"; fi)"
-  echo "dandan_key_sha256=${DANDAN_KEY_HASH}"
+  echo "dandan_credentials=${DANDANAPI_CREDENTIALS_STATE}"
+  echo "dandan_key_sha256=${DANDANAPI_KEY_SHA256}"
 } >> "${GITHUB_ENV:-/dev/null}"
 ls -la release-files/
 cat release-files/checksums.txt

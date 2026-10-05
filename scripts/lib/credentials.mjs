@@ -32,6 +32,23 @@ export function sha256Hex(value) {
 }
 
 /**
+ * Sanitized credentials taken from the environment, i.e. exactly the values the
+ * injector writes into the Dart sources.
+ *
+ * Shell checks must use this rather than the raw environment: the raw values can
+ * carry a byte-order mark, so comparing them against the generated file reports a
+ * false failure even when injection worked.
+ */
+export function credentialsFromEnv(env = process.env) {
+  return {
+    dandanAppId: sanitizeCredential(env.DANDANAPI_APPID),
+    dandanKey: sanitizeCredential(env.DANDANAPI_KEY),
+    kazumiAppId: sanitizeCredential(env.KAZUMI_APPID),
+    kazumiKey: sanitizeCredential(env.KAZUMI_KEY),
+  };
+}
+
+/**
  * Extracts the credentials the app will actually use, by reading them back out
  * of the generated Dart file rather than trusting the environment. Returns null
  * when the file is not injected.
