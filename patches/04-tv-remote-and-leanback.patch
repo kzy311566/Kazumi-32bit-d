@@ -36,7 +36,7 @@ index 8dbe3c0..86b81cc 100644
      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 diff --git a/lib/app_widget.dart b/lib/app_widget.dart
-index 288d7f0..09b9dfc 100644
+index 288d7f0..2ee0bb4 100644
 --- a/lib/app_widget.dart
 +++ b/lib/app_widget.dart
 @@ -16,6 +16,7 @@ import 'package:kazumi/navigation.dart';
@@ -66,32 +66,10 @@ index 288d7f0..09b9dfc 100644
    }
  
    void _syncWindowsTitleBarBrightness(ThemeProvider themeProvider) {
-@@ -279,46 +283,95 @@ class _AppWidgetState extends State<AppWidget>
-     final ThemeProvider themeProvider = context.watch<ThemeProvider>();
-     bool oledEnhance = GStorage.getSetting(SettingsKeys.oledEnhance);
+@@ -301,20 +305,33 @@ class _AppWidgetState extends State<AppWidget>
+             ? oledDarkTheme(dynamicDarkTheme)
+             : dynamicDarkTheme;
  
--    var app = DynamicColorBuilder(
--      builder: (theme, darkTheme) {
--        final useDynamicColor =
--            themeProvider.useDynamicColor && theme != null && darkTheme != null;
--        final lightTheme = useDynamicColor
--            ? _buildAppTheme(
--                brightness: Brightness.light,
--                colorScheme: theme,
--                fontFamily: themeProvider.currentFontFamily,
--              )
--            : themeProvider.light;
--        final dynamicDarkTheme = useDynamicColor
--            ? _buildAppTheme(
--                brightness: Brightness.dark,
--                colorScheme: darkTheme,
--                fontFamily: themeProvider.currentFontFamily,
--              )
--            : themeProvider.dark;
--        final effectiveDarkTheme = useDynamicColor && oledEnhance
--            ? oledDarkTheme(dynamicDarkTheme)
--            : dynamicDarkTheme;
--
 -        return MaterialApp.router(
 -          title: "Kazumi",
 -          localizationsDelegates: GlobalMaterialLocalizations.delegates,
@@ -106,36 +84,11 @@ index 288d7f0..09b9dfc 100644
 -          themeMode: themeProvider.themeMode,
 -          scaffoldMessengerKey: rootScaffoldMessengerKey,
 -          routerConfig: ModularApp.routerConfigOf(context),
--        );
--      },
-+    // Remote usage can begin at any time, and it changes whether focus rings are
-+    // painted, so the shell has to rebuild when that flips.
-+    var app = ValueListenableBuilder<bool>(
-+      valueListenable: TvSupport.remoteInUseListenable,
-+      builder: (context, remoteInUse, _) => DynamicColorBuilder(
-+        builder: (theme, darkTheme) {
-+          final useDynamicColor = themeProvider.useDynamicColor &&
-+              theme != null &&
-+              darkTheme != null;
-+          final lightTheme = useDynamicColor
-+              ? _buildAppTheme(
-+                  brightness: Brightness.light,
-+                  colorScheme: theme,
-+                  fontFamily: themeProvider.currentFontFamily,
-+                )
-+              : themeProvider.light;
-+          final dynamicDarkTheme = useDynamicColor
-+              ? _buildAppTheme(
-+                  brightness: Brightness.dark,
-+                  colorScheme: darkTheme,
-+                  fontFamily: themeProvider.currentFontFamily,
-+                )
-+              : themeProvider.dark;
-+          final effectiveDarkTheme = useDynamicColor && oledEnhance
-+              ? oledDarkTheme(dynamicDarkTheme)
-+              : dynamicDarkTheme;
-+
-+          return MaterialApp.router(
++        // Remote usage can begin at any time, and it changes whether focus rings
++        // are painted, so this subtree rebuilds when that flips.
++        return ListenableBuilder(
++          listenable: TvSupport.remoteInUseListenable,
++          builder: (context, _) => MaterialApp.router(
 +            title: "Kazumi",
 +            localizationsDelegates: GlobalMaterialLocalizations.delegates,
 +            supportedLocales: const [
@@ -150,19 +103,18 @@ index 288d7f0..09b9dfc 100644
 +            scaffoldMessengerKey: rootScaffoldMessengerKey,
 +            routerConfig: ModularApp.routerConfigOf(context),
 +            // Feed the platform's navigation mode into TV detection, and supply
-+            // the key mapping a remote needs to activate a focused control.
++            // the key handling a remote needs to activate a focused control.
 +            builder: (context, child) {
-+              final media = MediaQuery.of(context);
-+              TvSupport.updateFromMediaQuery(media);
++              TvSupport.updateFromMediaQuery(MediaQuery.of(context));
 +              return _TvRemoteActivationScope(
 +                child: child ?? const SizedBox.shrink(),
 +              );
 +            },
-+          );
-+        },
-+      ),
++          ),
+         );
+       },
      );
- 
+@@ -322,3 +339,60 @@ class _AppWidgetState extends State<AppWidget>
      return app;
    }
  }
@@ -174,31 +126,54 @@ index 288d7f0..09b9dfc 100644
 +/// default activation mapping. Without this, D-pad focus could be moved around
 +/// the UI and nothing could be pressed.
 +///
-+/// Only the missing key mappings are supplied here. Intent resolution then runs
-+/// through Flutter's normal focus chain, so the focused control's own
-+/// `onPressed` handles the press rather than a global override.
-+class _TvRemoteActivationScope extends StatelessWidget {
++/// An early key handler is used rather than a `Shortcuts`/`SingleActivator`
++/// mapping: that is the pattern already proven by `PlayerKeyboardShortcuts`, and
++/// it avoids depending on how the shortcut machinery treats the `select` key
++/// across engine versions. The intent is still dispatched with [Actions.invoke]
++/// on the focused context, so the focused control's own `onPressed` handles the
++/// press instead of a global override.
++class _TvRemoteActivationScope extends StatefulWidget {
 +  const _TvRemoteActivationScope({required this.child});
 +
 +  final Widget child;
 +
 +  @override
-+  Widget build(BuildContext context) {
-+    // Intentionally not a const map: a const literal with SingleActivator keys
-+    // does not compile, because LogicalKeyboardKey's constants are not
-+    // compile-time constants to the analyzer.
-+    return Shortcuts(
-+      shortcuts: <ShortcutActivator, Intent>{
-+        const SingleActivator(LogicalKeyboardKey.select):
-+            const ActivateIntent(),
-+        const SingleActivator(LogicalKeyboardKey.gameButtonA):
-+            const ActivateIntent(),
-+        const SingleActivator(LogicalKeyboardKey.numpadEnter):
-+            const ActivateIntent(),
-+      },
-+      child: child,
-+    );
++  State<_TvRemoteActivationScope> createState() =>
++      _TvRemoteActivationScopeState();
++}
++
++class _TvRemoteActivationScopeState extends State<_TvRemoteActivationScope> {
++  @override
++  void initState() {
++    super.initState();
++    FocusManager.instance.addEarlyKeyEventHandler(_onKey);
 +  }
++
++  @override
++  void dispose() {
++    FocusManager.instance.removeEarlyKeyEventHandler(_onKey);
++    super.dispose();
++  }
++
++  KeyEventResult _onKey(KeyEvent event) {
++    if (event is! KeyDownEvent) return KeyEventResult.ignored;
++    if (!TvSupport.isUnmappedActivateKey(event.logicalKey)) {
++      return KeyEventResult.ignored;
++    }
++    // Inside a text field the key belongs to the field and its on-screen
++    // keyboard, so leave it alone.
++    final focusContext = FocusManager.instance.primaryFocus?.context;
++    if (focusContext == null) return KeyEventResult.ignored;
++    if (focusContext.widget is EditableText) return KeyEventResult.ignored;
++    if (focusContext.findAncestorWidgetOfExactType<EditableText>() != null) {
++      return KeyEventResult.ignored;
++    }
++    Actions.invoke(focusContext, ActivateIntent());
++    return KeyEventResult.handled;
++  }
++
++  @override
++  Widget build(BuildContext context) => widget.child;
 +}
 diff --git a/lib/pages/player/player_item.dart b/lib/pages/player/player_item.dart
 index 190a147..a12db47 100644

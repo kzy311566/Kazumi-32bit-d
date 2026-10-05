@@ -137,6 +137,14 @@ class TvSupport {
       key == LogicalKeyboardKey.numpadEnter ||
       key == LogicalKeyboardKey.gameButtonA;
 
+  /// Keys that Flutter does *not* already map to an activation intent.
+  ///
+  /// Only these need intercepting. Handling `enter` too would swallow it before
+  /// text fields and dialogs see it, because the interception happens in an
+  /// early key handler that runs before the focus tree.
+  static bool isUnmappedActivateKey(LogicalKeyboardKey key) =>
+      key == LogicalKeyboardKey.select;
+
   /// Records remote usage so focus rings can be shown. Returns true when the key
   /// looks like it came from a remote.
   static bool noteKey(LogicalKeyboardKey key) {
@@ -276,7 +284,8 @@ class _TvFocusRingState extends State<TvFocusRing> {
     if (!TvSupport.showFocusHighlight) return widget.child;
 
     final radius =
-        widget.borderRadius ?? BorderRadius.circular(TvSupport.focusBorderRadius);
+        widget.borderRadius ??
+        BorderRadius.circular(TvSupport.focusBorderRadius);
     return Focus(
       canRequestFocus: false,
       onFocusChange: (value) {

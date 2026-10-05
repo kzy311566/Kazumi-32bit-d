@@ -57,6 +57,28 @@ void main() {
       expect(TvSupport.isActivateKey(LogicalKeyboardKey.goBack), isFalse);
       expect(TvSupport.isActivateKey(LogicalKeyboardKey.space), isFalse);
     });
+
+    test('only the unmapped key needs intercepting', () {
+      // Enter/Space/GameButtonA already reach ActivateIntent through Flutter's
+      // own shortcut table. Intercepting them in an early key handler would
+      // swallow Enter before text fields and dialogs could use it.
+      expect(
+        TvSupport.isUnmappedActivateKey(LogicalKeyboardKey.select),
+        isTrue,
+      );
+      expect(
+        TvSupport.isUnmappedActivateKey(LogicalKeyboardKey.enter),
+        isFalse,
+      );
+      expect(
+        TvSupport.isUnmappedActivateKey(LogicalKeyboardKey.numpadEnter),
+        isFalse,
+      );
+      expect(
+        TvSupport.isUnmappedActivateKey(LogicalKeyboardKey.gameButtonA),
+        isFalse,
+      );
+    });
   });
 
   group('TvSupport.applyTo', () {
