@@ -1,0 +1,10 @@
+# Keep scripts runnable on the Linux CI runner: CRLF in a shebang script fails.
+* text=auto
+*.sh text eol=lf
+*.mjs text eol=lf
+*.js text eol=lf
+*.dart text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.patch text eol=lf
+*.md text eol=lf

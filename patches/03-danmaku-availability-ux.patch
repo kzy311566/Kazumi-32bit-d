@@ -1,0 +1,176 @@
+diff --git a/lib/pages/player/controller/player_danmaku_controller.dart b/lib/pages/player/controller/player_danmaku_controller.dart
+index 268a691..3478af8 100644
+--- a/lib/pages/player/controller/player_danmaku_controller.dart
++++ b/lib/pages/player/controller/player_danmaku_controller.dart
+@@ -4,10 +4,12 @@ import 'package:canvas_danmaku/canvas_danmaku.dart' as canvas;
+ import 'package:kazumi/modules/danmaku/danmaku_module.dart';
+ import 'package:kazumi/pages/download/download_controller.dart';
+ import 'package:kazumi/request/apis/danmaku_api.dart';
++import 'package:kazumi/request/clients/danmaku_client.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+ import 'package:mobx/mobx.dart';
+ import 'package:kazumi/utils/danmaku.dart';
++import 'package:kazumi/utils/dandan_credentials.dart';
+ 
+ part 'player_danmaku_controller.g.dart';
+ 
+@@ -18,6 +20,9 @@ enum DanmakuLoadStatus {
+   success,
+   empty,
+   failed,
++
++  /// No DanDanPlay API credentials are configured, so no request was attempted.
++  credentialsMissing,
+ }
+ 
+ class DanmakuLoadResult {
+@@ -50,6 +55,17 @@ class DanmakuLoadResult {
+     );
+   }
+ 
++  /// No request was made because no API credentials are configured.
++  factory DanmakuLoadResult.credentialsMissing({
++    required int bangumiID,
++  }) {
++    return DanmakuLoadResult(
++      danmakus: const [],
++      bangumiID: bangumiID,
++      status: DanmakuLoadStatus.credentialsMissing,
++    );
++  }
++
+   final List<DanmakuEntry> danmakus;
+   final int bangumiID;
+   final DanmakuLoadStatus status;
+@@ -57,6 +73,9 @@ class DanmakuLoadResult {
+   bool get hasDanmakus => status == DanmakuLoadStatus.success;
+ 
+   bool get isFailed => status == DanmakuLoadStatus.failed;
++
++  bool get isCredentialsMissing =>
++      status == DanmakuLoadStatus.credentialsMissing;
+ }
+ 
+ class DanmakuTimeline {
+@@ -141,6 +160,10 @@ abstract class _PlayerDanmakuController with Store {
+     String pluginName,
+     int episode,
+   ) async {
++    // The cached-danmaku path reads from disk and needs no credentials, so it
++    // must stay reachable on credential-less builds: offline playback of an
++    // already-downloaded episode keeps its danmaku. Only the online paths
++    // require credentials, and the checks for those live inside them.
+     if (isLocalPlayback()) {
+       return await _fetchCachedDanmaku(
+         bangumiId,
+@@ -148,6 +171,17 @@ abstract class _PlayerDanmakuController with Store {
+         episode,
+       );
+     }
++    if (!DandanCredentials.isConfigured) {
++      // Every DanDanPlay request would be rejected with HTTP 403. Report the
++      // real reason instead of letting the caller show a generic
++      // "failed to load, try manual search" toast, which manual search cannot
++      // fix either.
++      KazumiLogger().w(
++        'PlayerDanmakuController: skipping online danmaku fetch, no '
++        'DanDanPlay API credentials are configured',
++      );
++      return DanmakuLoadResult.credentialsMissing(bangumiID: bangumiID);
++    }
+     return await _fetchDanDanmakuByBgmBangumiID(
+       bangumiId,
+       episode,
+@@ -230,6 +264,10 @@ abstract class _PlayerDanmakuController with Store {
+           KazumiLogger().w(
+               'PlayerController: failed to fetch danmaku online (may be offline)',
+               error: e);
++          // Credentials can be cleared between the guard above and the request.
++          if (e is DanmakuCredentialsMissingException) {
++            return DanmakuLoadResult.credentialsMissing(bangumiID: nextBangumiID);
++          }
+           return DanmakuLoadResult.failed(bangumiID: nextBangumiID);
+         }
+       }
+@@ -290,6 +328,9 @@ abstract class _PlayerDanmakuController with Store {
+       KazumiLogger().w(
+           'PlayerController: failed to get danmaku [BgmBangumiID] $bgmBangumiID',
+           error: e);
++      if (e is DanmakuCredentialsMissingException) {
++        return DanmakuLoadResult.credentialsMissing(bangumiID: nextBangumiID);
++      }
+     }
+     return DanmakuLoadResult.failed(bangumiID: nextBangumiID);
+   }
+diff --git a/lib/pages/player/danmaku_source_sheet.dart b/lib/pages/player/danmaku_source_sheet.dart
+index d02b315..e042afb 100644
+--- a/lib/pages/player/danmaku_source_sheet.dart
++++ b/lib/pages/player/danmaku_source_sheet.dart
+@@ -16,6 +16,7 @@ import 'package:kazumi/bean/widget/state_presentation.dart';
+ import 'package:kazumi/modules/danmaku/danmaku_episode_response.dart';
+ import 'package:kazumi/modules/danmaku/danmaku_search_response.dart';
+ import 'package:kazumi/pages/player/controller/player_danmaku_controller.dart';
++import 'package:kazumi/request/clients/danmaku_client.dart';
+ import 'package:kazumi/request/apis/danmaku_api.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+@@ -171,7 +172,9 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
+       if (!mounted) return;
+       setState(() {
+         _loading = false;
+-        _error = '搜索失败';
++        _error = error is DanmakuCredentialsMissingException
++            ? '未配置弹弹play API 凭证'
++            : '搜索失败';
+       });
+     }
+   }
+@@ -201,7 +204,9 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
+       if (!mounted) return;
+       setState(() {
+         _loading = false;
+-        _error = '分集加载失败';
++        _error = error is DanmakuCredentialsMissingException
++            ? '未配置弹弹play API 凭证'
++            : '分集加载失败';
+       });
+     }
+   }
+@@ -218,10 +223,14 @@ class _DanmakuSourceSheetState extends State<_DanmakuSourceSheet> {
+       KazumiDialog.showToast(
+         message: hasDanmakus ? '已切换弹幕源' : '暂无弹幕',
+       );
+-    } catch (_) {
++    } catch (error) {
+       if (!mounted) return;
+       setState(() => _loading = false);
+-      KazumiDialog.showToast(message: '弹幕源切换失败');
++      KazumiDialog.showToast(
++        message: error is DanmakuCredentialsMissingException
++            ? '未配置弹弹play API 凭证，无法加载弹幕'
++            : '弹幕源切换失败',
++      );
+     }
+   }
+ 
+diff --git a/lib/pages/video/video_controller.dart b/lib/pages/video/video_controller.dart
+index 08b310b..30a217e 100644
+--- a/lib/pages/video/video_controller.dart
++++ b/lib/pages/video/video_controller.dart
+@@ -561,7 +561,14 @@ abstract class _VideoPageController with Store implements Disposable {
+           );
+         } else {
+           playerController.danmaku.applyUnavailableDanmakuLoad(result);
+-          if (result.isFailed) {
++          // Distinguish "no credentials" from "the request failed": the fix is
++          // completely different, and manual search cannot work either without
++          // credentials.
++          if (result.isCredentialsMissing) {
++            KazumiDialog.showToast(
++              message: '未配置弹弹play API 凭证，无法加载弹幕（设置 → 弹幕设置）',
++            );
++          } else if (result.isFailed) {
+             KazumiDialog.showToast(message: '弹幕加载失败，可手动检索');
+           }
+         }

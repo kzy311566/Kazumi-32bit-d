@@ -1,0 +1,8 @@
+# Secrets written by scripts/setup-signing.sh must never be committed.
+android/key.properties
+*.jks
+*.keystore
+
+# Local verification scratch directories (tools/verify-all.mjs)
+.verify/
+.inject-check/

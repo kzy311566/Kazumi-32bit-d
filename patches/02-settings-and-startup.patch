@@ -1,0 +1,126 @@
+diff --git a/lib/bean/settings/network_mirror_settings.dart b/lib/bean/settings/network_mirror_settings.dart
+index 0c672f1..0d55a34 100644
+--- a/lib/bean/settings/network_mirror_settings.dart
++++ b/lib/bean/settings/network_mirror_settings.dart
+@@ -34,8 +34,15 @@ class _NetworkMirrorSettingsState extends State<NetworkMirrorSettings> {
+         SettingsTile(
+           leading: Icons.travel_explore_rounded,
+           title: const Text('番剧条目加速'),
+-          description: const Text(
+-            '番剧信息与评论',
++          description: Text(
++            // A stored "mirror" selection is downgraded when the mirror
++            // credentials are missing, so say why instead of letting the
++            // choice look ignored.
++            !BangumiAcceleration.mirrorAvailable &&
++                    GStorage.getSetting(SettingsKeys.bangumiAcceleration) ==
++                        'mirror'
++                ? '镜像不可用（缺少凭证），已回退 ECH'
++                : '番剧信息与评论',
+             maxLines: 1,
+             overflow: TextOverflow.ellipsis,
+           ),
+diff --git a/lib/main.dart b/lib/main.dart
+index 0e2ebdf..162f819 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -6,6 +6,7 @@ import 'package:flutter_modular/flutter_modular.dart';
+ import 'package:kazumi/bean/settings/theme_provider.dart';
+ import 'package:path_provider/path_provider.dart';
+ import 'package:kazumi/services/storage/storage.dart';
++import 'package:kazumi/services/storage/danmaku_credential_store.dart';
+ import 'package:hive_ce_flutter/hive_flutter.dart';
+ import 'package:kazumi/services/network/metered_network_service.dart';
+ import 'package:kazumi/services/network/ech_http_licenses.dart';
+@@ -43,6 +44,9 @@ void main() async {
+     final hivePath = '${(await getApplicationSupportDirectory()).path}/hive';
+     await Hive.initFlutter(hivePath);
+     await GStorage.init();
++    // Activate user-supplied DanDanPlay credentials, if any, before any
++    // danmaku request can be issued.
++    DanmakuCredentialStore.load();
+   } catch (e) {
+     debugPrint('Storage initialization failed: $e');
+ 
+diff --git a/lib/pages/settings/danmaku/danmaku_settings.dart b/lib/pages/settings/danmaku/danmaku_settings.dart
+index d250032..3828990 100644
+--- a/lib/pages/settings/danmaku/danmaku_settings.dart
++++ b/lib/pages/settings/danmaku/danmaku_settings.dart
+@@ -4,6 +4,7 @@ import 'package:kazumi/bean/dialog/dialog_helper.dart';
+ import 'package:kazumi/bean/settings/settings_detail_scaffold.dart';
+ import 'package:kazumi/bean/settings/settings_list.dart';
+ import 'package:kazumi/pages/settings/danmaku/danmaku_ch_convert_tile.dart';
++import 'package:kazumi/pages/settings/danmaku/danmaku_credential_tile.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+ 
+ class DanmakuSettingsPage extends StatefulWidget {
+@@ -193,6 +194,15 @@ class _DanmakuSettingsPageState extends State<DanmakuSettingsPage> {
+               ),
+             ],
+           ),
++          SettingsSection(
++            title: Text('弹幕接口凭证'),
++            tiles: [
++              const DanmakuCredentialTile(),
++            ],
++            bottomInfo: Text(
++              '弹弹play 弹幕需要 API 凭证。安装包未内置时，可在此填写你自己的 AppId 与 AppSecret。',
++            ),
++          ),
+           SettingsSection(
+             title: Text('弹幕屏蔽'),
+             tiles: [
+diff --git a/lib/pages/settings/danmaku/danmaku_settings_sheet.dart b/lib/pages/settings/danmaku/danmaku_settings_sheet.dart
+index 06c431d..2104d1b 100644
+--- a/lib/pages/settings/danmaku/danmaku_settings_sheet.dart
++++ b/lib/pages/settings/danmaku/danmaku_settings_sheet.dart
+@@ -7,6 +7,7 @@ import 'package:kazumi/bean/settings/settings_list.dart';
+ import 'package:kazumi/bean/widget/connected_tabs.dart';
+ import 'package:kazumi/bean/widget/content_section.dart';
+ import 'package:kazumi/pages/settings/danmaku/danmaku_ch_convert_tile.dart';
++import 'package:kazumi/pages/settings/danmaku/danmaku_credential_tile.dart';
+ import 'package:kazumi/pages/settings/danmaku/danmaku_shield_settings_sheet.dart';
+ import 'package:kazumi/pages/settings/danmaku/danmaku_time_offset_sheet.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+@@ -204,6 +205,10 @@ class _DanmakuSettingsSheetState extends State<_DanmakuSettingsSheet> {
+                   ),
+                 ]),
+                 const SizedBox(height: 24),
++                ContentSection.group(title: '弹幕接口凭证', children: [
++                  const DanmakuCredentialTile(),
++                ]),
++                const SizedBox(height: 24),
+                 ContentSection.group(title: '校准与过滤', children: [
+                   const DanmakuChConvertTile(),
+                   SettingsTile(
+diff --git a/lib/services/storage/settings_keys.dart b/lib/services/storage/settings_keys.dart
+index e6b4377..1d02c64 100644
+--- a/lib/services/storage/settings_keys.dart
++++ b/lib/services/storage/settings_keys.dart
+@@ -208,6 +208,26 @@ class SettingsKeys {
+     true,
+     group: SettingGroup.danmaku,
+   );
++  // User-supplied DanDanPlay open API credentials. The upstream release
++  // pipeline injects these from private CI secrets, so builds that cannot read
++  // those secrets (community 32-bit builds, local builds) need a runtime
++  // fallback; without it every danmaku request fails with HTTP 403.
++  //
++  // These are registered in the danmaku group for UI grouping only. They are
++  // deliberately NOT listed in [all], because that registry drives
++  // resetDanmakuSettings(), whose UI promises to restore danmaku display
++  // preferences — silently deleting the user's API credentials would break
++  // danmaku at the next launch with no explanation.
++  static const danmakuCredentialAppId = SettingKey<String>(
++    'danmakuCredentialAppId',
++    '',
++    group: SettingGroup.danmaku,
++  );
++  static const danmakuCredentialSecret = SettingKey<String>(
++    'danmakuCredentialSecret',
++    '',
++    group: SettingGroup.danmaku,
++  );
+   static const themeMode = SettingKey<String>(
+     _SettingBoxKey.themeMode,
+     'system',

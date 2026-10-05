@@ -1,132 +1,231 @@
 name: Sync upstream release and publish Android 32-bit
 
+# This workflow overlays a small, reviewable patch set on top of the upstream
+# Kazumi release tag and builds an armeabi-v7a APK, because upstream ships only
+# an arm64/fat Android build.
+#
+# Patching an upstream checkout (instead of forking the whole tree) keeps the
+# delta auditable: everything this repository changes lives in patches/ and
+# overlay/, and is applied with `git apply`, which fails loudly if upstream
+# edits the same lines. That is intended 鈥?a silent mismatch would ship a
+# subtly broken APK.
+
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild and overwrite the release even if it already exists
+        type: boolean
+        default: true
+      upstream_tag:
+        description: Upstream tag to build (defaults to the latest release)
+        type: string
+        required: false
+        default: ''
   schedule:
     - cron: '0 */12 * * *'
 
 permissions:
   contents: write
 
+concurrency:
+  group: android-32bit-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   sync-and-build:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Get latest upstream release tag
+      - name: Checkout build definitions
+        uses: actions/checkout@v4
+
+      - name: Resolve upstream tag and commit
         id: upstream
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG=$(gh api repos/Predidit/Kazumi/releases/latest --jq .tag_name)
+          set -euo pipefail
+          if [ -n "${{ inputs.upstream_tag }}" ]; then
+            TAG="${{ inputs.upstream_tag }}"
+          else
+            TAG=$(gh api repos/Predidit/Kazumi/releases/latest --jq .tag_name)
+          fi
           if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            echo "Failed to get upstream tag"
+            echo "::error::could not resolve an upstream release tag"
             exit 1
           fi
+          SHA=$(gh api "repos/Predidit/Kazumi/git/ref/tags/$TAG" --jq '.object.sha' 2>/dev/null || true)
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Latest upstream tag: $TAG"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Upstream tag=$TAG sha=${SHA:-unknown}"
 
-      - name: Check if release already exists in current repo
+      - name: Check whether this release already exists
         id: exists
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ steps.upstream.outputs.tag }}"
-          if gh api "repos/${{ github.repository }}/releases/tags/$TAG" >/dev/null 2>&1; then
+          set -euo pipefail
+          if gh api "repos/${{ github.repository }}/releases/tags/${{ steps.upstream.outputs.tag }}" >/dev/null 2>&1; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG already exists in this repo. Skip."
           else
             echo "exists=false" >> "$GITHUB_OUTPUT"
-            echo "Release $TAG does not exist yet."
           fi
 
-      - name: Debug release existence
+      - name: Skip when nothing changed
+        if: steps.exists.outputs.exists == 'true' && inputs.force != true && github.event_name == 'schedule'
+        run: echo "Release ${{ steps.upstream.outputs.tag }} already published. Nothing to do."
+
+      - name: Download upstream source at the release tag
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          echo "upstream_tag=${{ steps.upstream.outputs.tag }}"
-          echo "exists=${{ steps.exists.outputs.exists }}"
+          set -euo pipefail
+          mkdir -p upstream
+          gh api "repos/Predidit/Kazumi/tarball/${{ steps.upstream.outputs.tag }}" > upstream.tar.gz
+          tar -xzf upstream.tar.gz -C upstream --strip-components=1
+          test -f upstream/pubspec.yaml
+          echo "upstream files: $(find upstream -type f | wc -l)"
 
-      - name: Stop if already released
-        if: steps.exists.outputs.exists == 'true'
-        run: echo "Already released. Nothing to do."
-
-      - name: Checkout upstream source by tag
-        if: steps.exists.outputs.exists == 'false'
-        uses: actions/checkout@v4
-        with:
-          repository: Predidit/Kazumi
-          ref: ${{ steps.upstream.outputs.tag }}
-
-      - name: Set tag env
-        if: steps.exists.outputs.exists == 'false'
-        run: echo "tag=${{ steps.upstream.outputs.tag }}" >> "$GITHUB_ENV"
-
-      - name: Install dependencies
-        if: steps.exists.outputs.exists == 'false'
+      - name: Overlay new files
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang cmake libgtk-3-dev ninja-build libayatana-appindicator3-dev libasound2-dev
-        shell: bash
+          set -euo pipefail
+          cp -a overlay/. upstream/
+          echo "overlaid $(find overlay -type f | wc -l) files"
+
+      - name: Apply patch set
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          for patch in ../patches/*.patch; do
+            echo "--- applying $patch"
+            git apply --verbose "$patch"
+          done
+
+      - name: Confirm the patch set landed
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          grep -q 'DandanCredentials' lib/utils/dandan_credentials.dart
+          grep -q 'DanmakuCredentialTile' lib/pages/settings/danmaku/danmaku_settings.dart
+          grep -q 'DanmakuCredentialStore.load' lib/main.dart
+          grep -q '_buildTimeCredentialsInjected' lib/utils/dandan_credentials.dart
+          echo "patch set verified"
+
+      # Optional: with these secrets set, the APK is signed with a stable key so
+      # new builds can be installed over old ones. Otherwise the debug keystore
+      # is used and every CI run produces a different signature.
+      - name: Configure release signing (optional)
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        env:
+          SIGNING_KEY_BASE64: ${{ secrets.SIGNING_KEY_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.KEY_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: bash ../scripts/setup-signing.sh
 
       - name: Set up JDK 17
-        if: steps.exists.outputs.exists == 'false'
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Set up Flutter
-        if: steps.exists.outputs.exists == 'false'
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
         uses: subosito/flutter-action@v2.16.0
         with:
           channel: stable
-          flutter-version-file: pubspec.yaml
+          flutter-version-file: upstream/pubspec.yaml
 
       - name: Get Flutter dependencies
-        if: steps.exists.outputs.exists == 'false'
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
         run: flutter pub get
-        shell: bash
+
+      # Cheap, authoritative check before spending build minutes: proves the
+      # configured credentials are accepted by the open API.
+      - name: Validate DanDanPlay credentials
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        env:
+          DANDANAPI_APPID: ${{ secrets.DANDANAPI_APPID }}
+          DANDANAPI_KEY: ${{ secrets.DANDANAPI_KEY }}
+        run: node scripts/validate-credentials.mjs
+
+      # Kept non-blocking: an upstream-only test regression must not stop the
+      # 32-bit build, but the result stays visible in the job log.
+      - name: Run credential unit tests (non-blocking)
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        continue-on-error: true
+        run: flutter test test/dandan_credentials_test.dart
 
       - name: Build Android 32-bit APK
-        if: steps.exists.outputs.exists == 'false'
-        run: flutter build apk --split-per-abi
-        shell: bash
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        env:
+          DANDANAPI_APPID: ${{ secrets.DANDANAPI_APPID }}
+          DANDANAPI_KEY: ${{ secrets.DANDANAPI_KEY }}
+          KAZUMI_APPID: ${{ secrets.KAZUMI_APPID }}
+          KAZUMI_KEY: ${{ secrets.KAZUMI_KEY }}
+          APP_VERSION_NAME: ${{ steps.upstream.outputs.tag }}
+        run: bash ../scripts/build-android-32bit.sh
 
-      - name: Verify 32-bit APK exists
-        if: steps.exists.outputs.exists == 'false'
-        run: |
-          test -f build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk
-        shell: bash
-
-      - name: Prepare APK
-        if: steps.exists.outputs.exists == 'false'
-        run: |
-          mkdir -p release-files
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk \
-             release-files/Kazumi_android_armeabi-v7a_${{ env.tag }}.apk
-        shell: bash
+      - name: Verify APK is a usable 32-bit build
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        env:
+          DANDANAPI_APPID: ${{ secrets.DANDANAPI_APPID }}
+        run: APK="$GITHUB_WORKSPACE/upstream/${artifact}" bash ../scripts/verify-apk.sh
 
       - name: Upload artifact
-        if: steps.exists.outputs.exists == 'false'
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
         uses: actions/upload-artifact@v4
         with:
-          name: android-32bit-${{ env.tag }}
-          path: release-files/*.apk
+          name: android-32bit-${{ steps.upstream.outputs.tag }}
+          path: |
+            upstream/release-files/*.apk
+            upstream/release-files/checksums.txt
+          if-no-files-found: error
 
-      - name: Create GitHub Release
-        if: steps.exists.outputs.exists == 'false'
+      - name: Publish release
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ env.tag }}
-          name: Kazumi Android 32-bit ${{ env.tag }}
-          files: release-files/*.apk
+          tag_name: ${{ steps.upstream.outputs.tag }}
+          name: Kazumi Android 32-bit ${{ steps.upstream.outputs.tag }}
+          files: |
+            upstream/release-files/*.apk
+            upstream/release-files/checksums.txt
           body: |
-            Android 32-bit (`armeabi-v7a`) build for upstream Kazumi release `${{ env.tag }}`.
+            Kazumi **Android 32-bit (`armeabi-v7a`)** build, patched from upstream
+            release `${{ steps.upstream.outputs.tag }}`.
 
-            Upstream repository:
-            https://github.com/Predidit/Kazumi
+            | | |
+            |---|---|
+            | Upstream source | https://github.com/Predidit/Kazumi/tree/${{ steps.upstream.outputs.tag }} |
+            | Upstream commit | `${{ steps.upstream.outputs.sha }}` |
+            | Patch set | `patches/` + `overlay/` in this repository |
+            | DanDanPlay AppId | `${{ env.dandan_appid || 'not injected' }}` |
+            | DanDanPlay secret sha256 | `${{ env.dandan_key_sha256 }}` |
 
-            Upstream release:
-            https://github.com/Predidit/Kazumi/releases/tag/${{ env.tag }}
+            ### What this build adds over upstream
 
-            Upstream source:
-            https://github.com/Predidit/Kazumi/tree/${{ env.tag }}
+            - **Working danmaku.** Upstream injects the DanDanPlay API credentials at
+              build time from private CI secrets that this mirror cannot read. Here the
+              credentials come from this repository's secrets, so danmaku loads instead
+              of failing with HTTP 403.
+            - **In-app credential entry.** Settings 鈫?寮瑰箷璁剧疆 鈫?寮瑰箷鎺ュ彛鍑瘉 lets you
+              use your own AppId/AppSecret if this build has none.
+            - **Graceful degradation.** With no credentials the app skips danmaku
+              requests instead of issuing ones that are guaranteed to fail.
+            - **Bangumi mirror fallback.** Without mirror credentials the app falls back
+              to ECH instead of an API that would reject the request.
+
+            Upstream repository and credit: https://github.com/Predidit/Kazumi
