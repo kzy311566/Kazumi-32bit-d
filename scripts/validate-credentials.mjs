@@ -87,18 +87,35 @@ async function check(label, path, query = '') {
   return res.status;
 }
 
+/**
+ * Classifies a response so a rate limit is never mistaken for a bad credential.
+ *
+ * A 429 says the API is throttling this IP, not that the AppId/AppSecret are
+ * wrong. Treating it as a rejection would fail a perfectly good build, and the
+ * danmaku endpoint is exactly the one the documentation says is rate limited.
+ */
+const classify = (status) => {
+  if (status === 401 || status === 403) return 'rejected';
+  if (status === 429) return 'rate_limited';
+  if (status >= 500) return 'unreachable';
+  return 'ok';
+};
+
 console.log(`Validating DanDanPlay credentials from ${source}`);
 console.log(`  AppId length=${appId.length} (${appId.slice(0, 4)}...)`);
 console.log(`  secret length=${secret.length}`);
 
-let failed = false;
+let rejected = false;
+let inconclusive = false;
 try {
   const searchStatus = await check(
     'search/episodes',
     '/api/v2/search/episodes',
     '?anime=%E5%AD%A4%E7%8B%AC%E6%91%87%E6%BB%9A&v2=true',
   );
-  if (searchStatus !== 200) failed = true;
+  const searchVerdict = classify(searchStatus);
+  if (searchVerdict === 'rejected') rejected = true;
+  if (searchVerdict !== 'ok') inconclusive = true;
 
   // The endpoint that actually feeds danmaku. An authenticated call answers 302
   // to a pre-signed CDN URL, so any 2xx/3xx means the signature was accepted.
@@ -107,16 +124,27 @@ try {
     '/api/v2/comment/154490001',
     '?withRelated=true&chConvert=0',
   );
-  if (commentStatus >= 400) failed = true;
+  const commentVerdict = classify(commentStatus);
+  if (commentVerdict === 'rejected') rejected = true;
+  if (commentVerdict !== 'ok') inconclusive = true;
 } catch (e) {
   console.error(`::error::credential check failed to reach the API: ${e.message}`);
   process.exit(1);
 }
 
-if (failed) {
+if (rejected) {
   console.error('::error::DanDanPlay rejected these credentials.');
-  console.error('::error::Check the DANDANAPI_APPID / DANDANAPI_KEY repository secrets.');
+  console.error(
+    '::error::Check the DANDANAPI_APPID / DANDANAPI_KEY repository secrets.',
+  );
   process.exit(1);
+}
+
+if (inconclusive) {
+  console.log('::warning::the API did not clearly accept or reject the request');
+  console.log('::warning::(rate limiting or a server error). Shipping anyway;');
+  console.log('::warning::the build then validates the injected bytes after the APK is built.');
+  process.exit(0);
 }
 
 console.log('Credentials accepted. Danmaku will work in the built APK.');

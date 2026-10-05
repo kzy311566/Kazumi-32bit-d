@@ -81,12 +81,14 @@ jobs:
         if: steps.exists.outputs.exists != 'true' || inputs.force == true
         run: |
           set -euo pipefail
-          # A real clone (not a tarball) is required because the patch set is
+          # A real clone (not a tarball) is required because the patch set may be
           # applied with `git apply --3way`, which needs the base blobs in the
-          # object store. That is what lets the patches survive unrelated
-          # upstream edits between the tag they were generated against and the
-          # tag being built, instead of failing on context drift.
-          git clone --quiet --depth 1 --branch "${{ steps.upstream.outputs.tag }}" \
+          # object store. `--depth 1` does NOT provide them: the first CI run
+          # with --3way failed with "repository lacks the necessary blob to
+          # perform 3-way merge" and silently fell back to a plain apply. Blob
+          # filtering keeps the download reasonable while keeping that fallback
+          # usable when the build tag differs from the patch baseline.
+          git clone --quiet --filter=blob:none --branch "${{ steps.upstream.outputs.tag }}" \
             https://github.com/Predidit/Kazumi.git upstream
           test -f upstream/pubspec.yaml
           echo "upstream head=$(git -C upstream rev-parse HEAD)"

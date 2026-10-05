@@ -110,7 +110,10 @@ class TvSupport {
   }
 
   /// Logical keys that a TV remote can send.
-  static const Set<LogicalKeyboardKey> remoteKeys = {
+  ///
+  /// Not `const`: `LogicalKeyboardKey`'s constants are not compile-time
+  /// constants to the analyzer, so a const set fails to compile.
+  static final Set<LogicalKeyboardKey> remoteKeys = {
     LogicalKeyboardKey.arrowUp,
     LogicalKeyboardKey.arrowDown,
     LogicalKeyboardKey.arrowLeft,
