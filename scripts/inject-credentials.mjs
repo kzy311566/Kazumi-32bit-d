@@ -14,13 +14,27 @@
 // carries injected values is left untouched (and reported), while a file still
 // holding its template is filled in. That keeps the workflow safe to re-run
 // without resetting the checkout.
-import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 
-const dandanAppId = process.env.DANDANAPI_APPID ?? '';
-const dandanKey = process.env.DANDANAPI_KEY ?? '';
-const kazumiAppId = process.env.KAZUMI_APPID ?? '';
-const kazumiKey = process.env.KAZUMI_KEY ?? '';
+import { sanitizeCredential, sha256Hex } from './lib/credentials.mjs';
+
+const dandanAppId = sanitizeCredential(process.env.DANDANAPI_APPID);
+const dandanKey = sanitizeCredential(process.env.DANDANAPI_KEY);
+const kazumiAppId = sanitizeCredential(process.env.KAZUMI_APPID);
+const kazumiKey = sanitizeCredential(process.env.KAZUMI_KEY);
+
+for (const [label, raw, clean] of [
+  ['DANDANAPI_APPID', process.env.DANDANAPI_APPID ?? '', dandanAppId],
+  ['DANDANAPI_KEY', process.env.DANDANAPI_KEY ?? '', dandanKey],
+  ['KAZUMI_APPID', process.env.KAZUMI_APPID ?? '', kazumiAppId],
+  ['KAZUMI_KEY', process.env.KAZUMI_KEY ?? '', kazumiKey],
+]) {
+  if (raw.length !== clean.length) {
+    console.log(
+      `::warning::${label} contained ${raw.length - clean.length} non-printable character(s); stripped`,
+    );
+  }
+}
 
 /**
  * @typedef {object} Target
@@ -69,8 +83,7 @@ for (const target of targets) {
     / = false;/,
     ` = ${target.injected};`,
   );
-  const hashOf = (value) =>
-    createHash('sha256').update(value).digest('hex');
+  const hashOf = sha256Hex;
 
   console.log(`\n--- ${target.file} (${target.describe}) ---`);
 

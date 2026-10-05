@@ -198,6 +198,15 @@ jobs:
           APP_VERSION_NAME: ${{ steps.upstream.outputs.tag }}
         run: bash ../scripts/build-android-32bit.sh
 
+      # Verify the credentials that were actually compiled in, not the ones in
+      # the environment. GitHub's secret handling has been observed to prefix a
+      # byte-order mark, which invalidates every signature while all local checks
+      # still pass. This runs against the generated Dart file.
+      - name: Re-validate the injected credentials
+        if: steps.exists.outputs.exists != 'true' || inputs.force == true
+        working-directory: upstream
+        run: node ../scripts/validate-credentials.mjs lib/utils/dandan_credentials.dart
+
       - name: Verify APK is a usable 32-bit build
         if: steps.exists.outputs.exists != 'true' || inputs.force == true
         working-directory: upstream
