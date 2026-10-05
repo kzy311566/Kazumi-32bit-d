@@ -88,10 +88,44 @@ APK_SHA256="$(sha256sum "$DEST" | cut -d' ' -f1)"
   echo "$APK_SHA256  $(basename "$DEST")"
 } > release-files/checksums.txt
 
+# Release notes are written here rather than inline in the workflow: values
+# exported through $GITHUB_ENV are not visible to the `env` template context, so
+# a `body:` built from `${{ env.* }}` would silently render empty.
+DANDAN_KEY_HASH="$(printf '%s' "${DANDANAPI_KEY:-}" | sha256sum | cut -d' ' -f1)"
+cat > release-files/notes.md <<EOF
+Kazumi **Android 32-bit (\`armeabi-v7a\`)** build, patched from upstream
+release \`${APP_VERSION_NAME}\`.
+
+| | |
+|---|---|
+| Upstream source | https://github.com/Predidit/Kazumi/tree/${APP_VERSION_NAME} |
+| Patch set | \`patches/\` + \`overlay/\` in this repository |
+| DanDanPlay AppId | \`${DANDANAPI_APPID:-<not injected>}\` |
+| DanDanPlay secret | sha256 \`${DANDAN_KEY_HASH}\` |
+| APK sha256 | \`${APK_SHA256}\` |
+
+### What this build adds over upstream
+
+- **Working danmaku.** Upstream injects the DanDanPlay API credentials at build
+  time from private CI secrets that this mirror cannot read. Here they come from
+  this repository's own secrets, so danmaku loads instead of failing with
+  HTTP 403.
+- **In-app credential entry.** Settings > Danmaku > API credentials lets you use
+  your own AppId/AppSecret if this build has none.
+- **Graceful degradation.** With no credentials the app skips danmaku requests
+  instead of issuing ones that are guaranteed to fail, and still plays danmaku
+  cached for downloaded episodes.
+- **Bangumi mirror fallback.** Without mirror credentials the app falls back to
+  ECH instead of calling an API that would reject the request.
+
+Upstream repository and credit: https://github.com/Predidit/Kazumi
+EOF
+
 echo "sha256=$APK_SHA256"
 {
   echo "artifact=${DEST}"
-  echo "dandan_key_sha256=$(printf '%s' "${DANDANAPI_KEY:-}" | sha256sum | cut -d' ' -f1)"
+  echo "dandan_credentials=$(if [ -n "${DANDANAPI_APPID:-}" ]; then echo "injected (${DANDANAPI_APPID})"; else echo "not injected"; fi)"
+  echo "dandan_key_sha256=${DANDAN_KEY_HASH}"
 } >> "${GITHUB_ENV:-/dev/null}"
 ls -la release-files/
 cat release-files/checksums.txt
