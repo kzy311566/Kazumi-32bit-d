@@ -109,12 +109,19 @@ keystore，从第二个版本起就能正常覆盖安装：
 - `force`：即使该版本 Release 已存在也重新构建并覆盖
 - `upstream_tag`：指定要构建的上游 tag（默认取最新 release）
 
-构建流程会依次：拉取上游 tag 源码 → 覆盖 `overlay/` → `git apply patches/` →
-校验补丁落地 → 配置签名 → 构建 → **用真实凭证调一次 API 确认弹幕可用** →
-校验 APK 是纯 32 位且含 libmpv → 发布，并附带 `checksums.txt`。
+> [!NOTE]
+> 若目标版本的 Release 已存在，且触发方式是 `push` 或定时任务，构建会**跳过**
+> （避免重复烧构建时长）。要重新构建同一版本，请手动触发并勾选 `force`。
+
+构建流程会依次：checkout 本仓库 → 解析上游 tag → **git clone 上游源码（不是 tarball）**
+→ 覆盖 `overlay/` → `git apply --3way patches/` → 逐条反向校验补丁确实落地 →
+配置签名 → **用真实凭证调一次 API 确认弹幕可用** → 构建 armeabi-v7a APK →
+校验是纯 32 位且含 libmpv → 发布 APK + `checksums.txt`，release 说明由构建脚本生成
+（内含 AppId、密钥哈希、APK sha256）。
 
 其中"用真实凭证调一次 API"这步很关键：凭证填错会在构建阶段直接失败，
-而不是发布一个弹幕静默失效的包。
+而不是发布一个弹幕静默失效的包。实际已实测通过：19 个单测全绿、
+`Credentials accepted. Danmaku will work in the built APK.`。
 
 ## 下载
 
