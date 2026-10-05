@@ -17,6 +17,10 @@
 # Without them the build keeps using the debug keystore and warns.
 set -euo pipefail
 
+# Invoked with the upstream working directory as $PWD; resolve our own location
+# so the paths below cannot accidentally point outside the checkout.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
 GRADLE_FILE="android/app/build.gradle"
 KEY_PROPERTIES="android/key.properties"
 KEYSTORE_PATH="android/app/upload-keystore.jks"

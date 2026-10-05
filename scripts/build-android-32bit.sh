@@ -17,6 +17,14 @@
 #   SPLIT_PER_ABI     "0" to emit a single universal APK instead of splits.
 set -euo pipefail
 
+# This script is invoked from the *upstream* working directory, so anything it
+# needs from this repository must be resolved from its own location rather than
+# from $PWD. Hardcoding `scripts/...` here silently looked for the injector under
+# upstream/scripts/ and failed with MODULE_NOT_FOUND.
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+echo "repo root: $REPO_ROOT"
+echo "working dir: $PWD"
+
 APP_VERSION_NAME="${APP_VERSION_NAME:-unknown}"
 SPLIT_PER_ABI="${SPLIT_PER_ABI:-1}"
 
@@ -33,7 +41,7 @@ if [ -z "${KAZUMI_APPID:-}" ] || [ -z "${KAZUMI_KEY:-}" ]; then
   echo "::warning::cannot be signed, so the app falls back to ECH."
 fi
 
-node scripts/inject-credentials.mjs
+node "$REPO_ROOT/scripts/inject-credentials.mjs"
 
 if [ -n "${DANDANAPI_KEY:-}" ]; then
   grep -qF -- "$DANDANAPI_KEY" lib/utils/dandan_credentials.dart \
