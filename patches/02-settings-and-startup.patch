@@ -21,18 +21,32 @@ index 0c672f1..0d55a34 100644
              overflow: TextOverflow.ellipsis,
            ),
 diff --git a/lib/main.dart b/lib/main.dart
-index 0e2ebdf..162f819 100644
+index 0e2ebdf..ebae6ce 100644
 --- a/lib/main.dart
 +++ b/lib/main.dart
-@@ -6,6 +6,7 @@ import 'package:flutter_modular/flutter_modular.dart';
+@@ -6,6 +6,8 @@ import 'package:flutter_modular/flutter_modular.dart';
  import 'package:kazumi/bean/settings/theme_provider.dart';
  import 'package:path_provider/path_provider.dart';
  import 'package:kazumi/services/storage/storage.dart';
 +import 'package:kazumi/services/storage/danmaku_credential_store.dart';
++import 'package:kazumi/utils/tv_support.dart';
  import 'package:hive_ce_flutter/hive_flutter.dart';
  import 'package:kazumi/services/network/metered_network_service.dart';
  import 'package:kazumi/services/network/ech_http_licenses.dart';
-@@ -43,6 +44,9 @@ void main() async {
+@@ -26,6 +28,12 @@ void main() async {
+   WidgetsFlutterBinding.ensureInitialized();
+   registerEchHttpLicenses();
+   MediaKit.ensureInitialized();
++  // Observe remote/D-pad key presses so TV focus handling can activate on first
++  // use, and decide the TV form factor once the first frame reports a size.
++  TvSupport.installRemoteDetector();
++  WidgetsBinding.instance.addPostFrameCallback((_) {
++    TvSupport.initializeFromView();
++  });
+   if (Platform.isAndroid || Platform.isIOS) {
+     SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+     SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+@@ -43,6 +51,9 @@ void main() async {
      final hivePath = '${(await getApplicationSupportDirectory()).path}/hive';
      await Hive.initFlutter(hivePath);
      await GStorage.init();

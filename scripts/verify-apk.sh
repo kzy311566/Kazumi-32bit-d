@@ -53,13 +53,32 @@ fi
 
 echo
 echo "--- manifest sanity ---"
+BADGING=""
 if command -v aapt >/dev/null 2>&1; then
-  aapt dump badging "$APK" | head -5
+  BADGING="$(aapt dump badging "$APK")"
 elif command -v aapt2 >/dev/null 2>&1; then
-  aapt2 dump badging "$APK" | head -5
+  BADGING="$(aapt2 dump badging "$APK")"
 else
   echo "(aapt not available; skipping manifest dump)"
 fi
+
+if [ -n "$BADGING" ]; then
+  printf '%s\n' "$BADGING" | head -5
+  echo
+  echo "--- Android TV eligibility ---"
+  # A TV box can install the APK but never launch it unless the manifest carries
+  # the leanback launcher category, so assert it is really in the built APK.
+  if printf '%s\n' "$BADGING" | grep -q 'leanback-launchable-activity'; then
+    echo "OK: leanback launcher present (Android TV home screen)"
+  else
+    echo "::error::no leanback launcher in the APK; Android TV devices cannot launch it"
+    exit 1
+  fi
+  if printf '%s\n' "$BADGING" | grep -q 'touchscreen'; then
+    echo "::warning::the APK still declares a required touchscreen; TV installs may be blocked"
+  fi
+fi
+
 if ! unzip -p "$APK" AndroidManifest.xml >/dev/null 2>&1; then
   echo "::error::AndroidManifest.xml missing from the APK"
   exit 1

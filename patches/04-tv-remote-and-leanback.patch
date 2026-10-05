@@ -1,0 +1,321 @@
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index 8dbe3c0..86b81cc 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -31,6 +31,13 @@
+                 <action android:name="android.intent.action.MAIN"/>
+                 <category android:name="android.intent.category.LAUNCHER"/>
+             </intent-filter>
++            <!-- Android TV: without LEANBACK_LAUNCHER the app never appears on a
++                 TV home screen, so a 32-bit box could install the APK and still
++                 have no way to launch it. -->
++            <intent-filter>
++                <action android:name="android.intent.action.MAIN"/>
++                <category android:name="android.intent.category.LEANBACK_LAUNCHER"/>
++            </intent-filter>
+         </activity>
+         <!-- Don't delete the meta-data below.
+              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+@@ -63,6 +70,18 @@
+             </intent-filter>
+         </receiver>
+     </application>
++    <!-- A TV box has no touch screen. Declaring touchscreen as not required keeps
++         the APK installable on those devices and, combined with the leanback
++         launcher entry above, makes the app eligible for Android TV. -->
++    <uses-feature
++        android:name="android.hardware.touchscreen"
++        android:required="false" />
++    <uses-feature
++        android:name="android.software.leanback"
++        android:required="false" />
++    <uses-feature
++        android:name="android.hardware.gamepad"
++        android:required="false" />
+     <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+diff --git a/lib/app_widget.dart b/lib/app_widget.dart
+index 288d7f0..4bffba3 100644
+--- a/lib/app_widget.dart
++++ b/lib/app_widget.dart
+@@ -16,6 +16,7 @@ import 'package:kazumi/navigation.dart';
+ import 'package:kazumi/utils/constants.dart';
+ import 'package:kazumi/utils/device.dart';
+ import 'package:kazumi/utils/theme.dart';
++import 'package:kazumi/utils/tv_support.dart';
+ 
+ class AppWidget extends StatefulWidget {
+   const AppWidget({super.key});
+@@ -141,7 +142,7 @@ class _AppWidgetState extends State<AppWidget>
+     Color? color,
+     ColorScheme? colorScheme,
+   }) {
+-    return ThemeData(
++    final base = ThemeData(
+       useMaterial3: true,
+       fontFamily: fontFamily,
+       brightness: brightness,
+@@ -151,6 +152,9 @@ class _AppWidgetState extends State<AppWidget>
+       sliderTheme: sliderTheme2024,
+       pageTransitionsTheme: pageTransitionsTheme2024,
+     );
++    // Focus decoration is layered on here rather than through a second theme so
++    // that D-pad focus stays legible on every colour scheme, light or dark.
++    return TvSupport.applyTo(base);
+   }
+ 
+   void _syncWindowsTitleBarBrightness(ThemeProvider themeProvider) {
+@@ -279,46 +283,89 @@ class _AppWidgetState extends State<AppWidget>
+     final ThemeProvider themeProvider = context.watch<ThemeProvider>();
+     bool oledEnhance = GStorage.getSetting(SettingsKeys.oledEnhance);
+ 
+-    var app = DynamicColorBuilder(
+-      builder: (theme, darkTheme) {
+-        final useDynamicColor =
+-            themeProvider.useDynamicColor && theme != null && darkTheme != null;
+-        final lightTheme = useDynamicColor
+-            ? _buildAppTheme(
+-                brightness: Brightness.light,
+-                colorScheme: theme,
+-                fontFamily: themeProvider.currentFontFamily,
+-              )
+-            : themeProvider.light;
+-        final dynamicDarkTheme = useDynamicColor
+-            ? _buildAppTheme(
+-                brightness: Brightness.dark,
+-                colorScheme: darkTheme,
+-                fontFamily: themeProvider.currentFontFamily,
+-              )
+-            : themeProvider.dark;
+-        final effectiveDarkTheme = useDynamicColor && oledEnhance
+-            ? oledDarkTheme(dynamicDarkTheme)
+-            : dynamicDarkTheme;
+-
+-        return MaterialApp.router(
+-          title: "Kazumi",
+-          localizationsDelegates: GlobalMaterialLocalizations.delegates,
+-          supportedLocales: const [
+-            Locale.fromSubtags(
+-                languageCode: 'zh', scriptCode: 'Hans', countryCode: "CN")
+-          ],
+-          locale: const Locale.fromSubtags(
+-              languageCode: 'zh', scriptCode: 'Hans', countryCode: "CN"),
+-          theme: lightTheme,
+-          darkTheme: effectiveDarkTheme,
+-          themeMode: themeProvider.themeMode,
+-          scaffoldMessengerKey: rootScaffoldMessengerKey,
+-          routerConfig: ModularApp.routerConfigOf(context),
+-        );
+-      },
++    // Remote usage can begin at any time, and it changes whether focus rings are
++    // painted, so the shell has to rebuild when that flips.
++    var app = ValueListenableBuilder<bool>(
++      valueListenable: TvSupport.remoteInUseListenable,
++      builder: (context, remoteInUse, _) => DynamicColorBuilder(
++        builder: (theme, darkTheme) {
++          final useDynamicColor = themeProvider.useDynamicColor &&
++              theme != null &&
++              darkTheme != null;
++          final lightTheme = useDynamicColor
++              ? _buildAppTheme(
++                  brightness: Brightness.light,
++                  colorScheme: theme,
++                  fontFamily: themeProvider.currentFontFamily,
++                )
++              : themeProvider.light;
++          final dynamicDarkTheme = useDynamicColor
++              ? _buildAppTheme(
++                  brightness: Brightness.dark,
++                  colorScheme: darkTheme,
++                  fontFamily: themeProvider.currentFontFamily,
++                )
++              : themeProvider.dark;
++          final effectiveDarkTheme = useDynamicColor && oledEnhance
++              ? oledDarkTheme(dynamicDarkTheme)
++              : dynamicDarkTheme;
++
++          return MaterialApp.router(
++            title: "Kazumi",
++            localizationsDelegates: GlobalMaterialLocalizations.delegates,
++            supportedLocales: const [
++              Locale.fromSubtags(
++                  languageCode: 'zh', scriptCode: 'Hans', countryCode: "CN")
++            ],
++            locale: const Locale.fromSubtags(
++                languageCode: 'zh', scriptCode: 'Hans', countryCode: "CN"),
++            theme: lightTheme,
++            darkTheme: effectiveDarkTheme,
++            themeMode: themeProvider.themeMode,
++            scaffoldMessengerKey: rootScaffoldMessengerKey,
++            routerConfig: ModularApp.routerConfigOf(context),
++            // Feed the platform's navigation mode into TV detection, and supply
++            // the key mapping a remote needs to activate a focused control.
++            builder: (context, child) {
++              final media = MediaQuery.of(context);
++              TvSupport.updateFromMediaQuery(media);
++              return _TvRemoteActivationScope(
++                child: child ?? const SizedBox.shrink(),
++              );
++            },
++          );
++        },
++      ),
+     );
+ 
+     return app;
+   }
+ }
++
++/// Makes a TV remote's centre button activate the focused control.
++///
++/// Flutter maps `Enter`, `Space` and `GameButtonA` to [ActivateIntent], but a
++/// remote's OK/centre press arrives as [LogicalKeyboardKey.select], which has no
++/// default activation mapping. Without this, D-pad focus could be moved around
++/// the UI and nothing could be pressed.
++///
++/// Only the missing key mappings are supplied here. Intent resolution then runs
++/// through Flutter's normal focus chain, so the focused control's own
++/// `onPressed` handles the press rather than a global override.
++class _TvRemoteActivationScope extends StatelessWidget {
++  const _TvRemoteActivationScope({required this.child});
++
++  final Widget child;
++
++  @override
++  Widget build(BuildContext context) {
++    return Shortcuts(
++      shortcuts: const <ShortcutActivator, Intent>{
++        SingleActivator(LogicalKeyboardKey.select): ActivateIntent(),
++        SingleActivator(LogicalKeyboardKey.gameButtonA): ActivateIntent(),
++        SingleActivator(LogicalKeyboardKey.numpadEnter): ActivateIntent(),
++      },
++      child: child,
++    );
++  }
++}
+diff --git a/lib/pages/player/player_item.dart b/lib/pages/player/player_item.dart
+index 190a147..a12db47 100644
+--- a/lib/pages/player/player_item.dart
++++ b/lib/pages/player/player_item.dart
+@@ -11,6 +11,7 @@ import 'package:kazumi/pages/player/player_screenshot_sheet.dart';
+ import 'package:kazumi/pages/player/controller/player_screenshot_controller.dart';
+ import 'package:kazumi/pages/player/syncplay_sheet.dart';
+ import 'package:kazumi/utils/constants.dart';
++import 'package:kazumi/utils/tv_support.dart';
+ import 'package:kazumi/services/logging/logger.dart';
+ import 'package:kazumi/services/player/pip_utils.dart';
+ import 'package:kazumi/services/sync/webdav.dart';
+@@ -355,7 +356,7 @@ class _PlayerItemState extends State<PlayerItem>
+ 
+   void _initKeyboardActions() {
+     keyboardActions = {
+-      'playorpause': () => playerController.playOrPause(),
++      'playorpause': () => _handlePlayPauseShortcut(),
+       'forward': handleShortcutForwardDown,
+       'rewind': handleShortcutRewind,
+       'next': () => handlePreNextEpisode('next'),
+@@ -382,6 +383,20 @@ class _PlayerItemState extends State<PlayerItem>
+     };
+   }
+ 
++  /// Play/pause, and on a TV also hand focus to the on-screen controls.
++  ///
++  /// A remote has no pointer, so without this the panel's buttons are reachable
++  /// only if the user happens to press the right arrow at the right time. This
++  /// makes play/pause the documented way in: one press toggles playback and
++  /// moves focus onto the controls, where the D-pad can then navigate them.
++  Future<void> _handlePlayPauseShortcut() async {
++    await playerController.playOrPause();
++    if (!mounted) return;
++    if (TvSupport.remoteInUse && !widget.keyboardFocus.hasFocus) {
++      widget.keyboardFocus.requestFocus();
++    }
++  }
++
+   void _initPlayerMenu() {
+     unawaited(PlayerMenuService.initialize(keyboardActions));
+   }
+diff --git a/lib/pages/player/player_keyboard_shortcuts.dart b/lib/pages/player/player_keyboard_shortcuts.dart
+index bfd8d0a..2e9fe11 100644
+--- a/lib/pages/player/player_keyboard_shortcuts.dart
++++ b/lib/pages/player/player_keyboard_shortcuts.dart
+@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
+ import 'package:flutter/services.dart';
+ import 'package:kazumi/services/storage/storage.dart';
+ import 'package:kazumi/utils/constants.dart';
++import 'package:kazumi/utils/tv_support.dart';
+ 
+ typedef PlayerShortcutAction = FutureOr<void> Function();
+ 
+@@ -50,6 +51,19 @@ class _PlayerKeyboardShortcutsState extends State<PlayerKeyboardShortcuts> {
+       _activeLongPressKeys =
+       <LogicalKeyboardKey, PlayerLongPressShortcutActions>{};
+ 
++  /// Actions that a D-pad must be able to take over.
++  ///
++  /// The arrow keys are the only way to navigate focus on a remote, so binding
++  /// them permanently to seek/volume would make the on-screen controls
++  /// unreachable. On TV these actions stay on the button shortcuts and the
++  /// arrows navigate instead.
++  static const Set<String> _arrowBoundActions = {
++    'forward',
++    'rewind',
++    'volumeup',
++    'volumedown',
++  };
++
+   @override
+   void initState() {
+     super.initState();
+@@ -103,6 +117,16 @@ class _PlayerKeyboardShortcutsState extends State<PlayerKeyboardShortcuts> {
+       return KeyEventResult.ignored;
+     }
+ 
++    // On a remote, let the D-pad move focus instead of seeking or changing
++    // volume whenever a focusable control currently holds it. The player area
++    // itself keeps the arrow shortcuts, so a user who never opens the panel
++    // still gets seek/volume exactly as before.
++    if (TvSupport.remoteInUse &&
++        _arrowBoundActions.contains(actionName) &&
++        _focusIsOnControl()) {
++      return KeyEventResult.ignored;
++    }
++
+     if (event is KeyDownEvent) {
+       final action = widget.actions[actionName];
+       if (action == null) {
+@@ -153,6 +177,33 @@ class _PlayerKeyboardShortcutsState extends State<PlayerKeyboardShortcuts> {
+         focusContext.findAncestorWidgetOfExactType<EditableText>() == null;
+   }
+ 
++  /// True when the primary focus sits on a pressable player control rather than
++  /// on the player area itself.
++  ///
++  /// That distinction is what keeps both interaction models working: the panel's
++  /// buttons navigate with the D-pad, while the bare player surface keeps the
++  /// arrow shortcuts it has always had.
++  bool _focusIsOnControl() {
++    final primaryFocus = FocusManager.instance.primaryFocus;
++    if (primaryFocus == null) return false;
++    if (primaryFocus == widget.focusScopeNode) return false;
++    final focusContext = primaryFocus.context;
++    if (focusContext == null) return false;
++    if (focusContext.widget is EditableText) return false;
++    if (focusContext.findAncestorWidgetOfExactType<EditableText>() != null) {
++      return false;
++    }
++    if (focusContext.widget is ButtonStyleButton) return true;
++    if (focusContext.findAncestorWidgetOfExactType<ButtonStyleButton>() != null) {
++      return true;
++    }
++    if (focusContext.widget is InkWell) return true;
++    if (focusContext.findAncestorWidgetOfExactType<InkWell>() != null) {
++      return true;
++    }
++    return false;
++  }
++
+   String? _findActionName(String keyLabel) {
+     for (final entry in _shortcuts.entries) {
+       if (entry.value.contains(keyLabel)) {
