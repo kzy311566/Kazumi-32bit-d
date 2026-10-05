@@ -77,17 +77,26 @@ jobs:
         if: steps.exists.outputs.exists == 'true' && inputs.force != true && github.event_name == 'schedule'
         run: echo "Release ${{ steps.upstream.outputs.tag }} already published. Nothing to do."
 
-      - name: Download upstream source at the release tag
+      - name: Check out upstream source at the release tag
         if: steps.exists.outputs.exists != 'true' || inputs.force == true
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p upstream
-          gh api "repos/Predidit/Kazumi/tarball/${{ steps.upstream.outputs.tag }}" > upstream.tar.gz
-          tar -xzf upstream.tar.gz -C upstream --strip-components=1
+          # A real clone (not a tarball) is required because the patch set is
+          # applied with `git apply --3way`, which needs the base blobs in the
+          # object store. That is what lets the patches survive unrelated
+          # upstream edits between the tag they were generated against and the
+          # tag being built, instead of failing on context drift.
+          git clone --quiet --depth 1 --branch "${{ steps.upstream.outputs.tag }}" \
+            https://github.com/Predidit/Kazumi.git upstream
           test -f upstream/pubspec.yaml
-          echo "upstream files: $(find upstream -type f | wc -l)"
+          echo "upstream head=$(git -C upstream rev-parse HEAD)"
+          BASELINE="$(grep -E '^upstream_tag=' upstream-tag | cut -d= -f2)"
+          echo "patch baseline=$BASELINE  building=${{ steps.upstream.outputs.tag }}"
+          if [ "$BASELINE" != "${{ steps.upstream.outputs.tag }}" ]; then
+            echo "::warning::the patch set was generated against $BASELINE but this build uses"
+            echo "::warning::${{ steps.upstream.outputs.tag }}; relying on a 3-way merge."
+            echo "::warning::regenerate patches/ against ${{ steps.upstream.outputs.tag }} when convenient."
+          fi
 
       - name: Overlay new files
         if: steps.exists.outputs.exists != 'true' || inputs.force == true
@@ -103,7 +112,18 @@ jobs:
           set -euo pipefail
           for patch in ../patches/*.patch; do
             echo "--- applying $patch"
-            git apply --verbose "$patch"
+            git apply --3way --verbose "$patch"
+          done
+          # --3way records what it applied in the index. Verify each patch really
+          # is present, so a silent no-op can never reach the APK.
+          for patch in ../patches/*.patch; do
+            if git apply --reverse --check --cached "$patch" 2>/dev/null \
+               || git apply --reverse --check "$patch" 2>/dev/null; then
+              echo "verified: $(basename "$patch")"
+            else
+              echo "::error::$(basename "$patch") is not fully present after applying"
+              exit 1
+            fi
           done
 
       - name: Confirm the patch set landed
@@ -115,6 +135,7 @@ jobs:
           grep -q 'DanmakuCredentialTile' lib/pages/settings/danmaku/danmaku_settings.dart
           grep -q 'DanmakuCredentialStore.load' lib/main.dart
           grep -q '_buildTimeCredentialsInjected' lib/utils/dandan_credentials.dart
+          grep -q 'bangumiMirrorCredentialsAvailable' lib/utils/bangumi_mirror_credentials.dart
           echo "patch set verified"
 
       # Optional: with these secrets set, the APK is signed with a stable key so

@@ -1,0 +1,19 @@
+# Upstream release tag this patch set is based on.
+#
+# patches/*.patch are generated as a diff against exactly this tag's tree, so
+# they are guaranteed to apply to it. Building a different upstream tag is
+# supported (the workflow resolves the newest release by default) but then the
+# patches must be regenerated first:
+#
+#   git -C upstream fetch --depth 1 origin refs/tags/<tag>:refs/tags/<tag>
+#   git -C upstream worktree add --detach ../.tag <tag>
+#   # port the changes into ../.tag, then:
+#   git -C ../.tag diff HEAD --output=patches/01-....patch -- <files>
+#
+# Then update this file and run: node tools/verify-all.mjs
+#
+# Why pin at all: the previous revision of this repository generated its patches
+# against upstream's `main` branch while the workflow built the newest *release*
+# tag. Those two trees differ, so every patch silently failed to apply on CI and
+# the job failed at the "confirm the patch set landed" gate.
+upstream_tag=2.3.7

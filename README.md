@@ -122,14 +122,47 @@ keystore，从第二个版本起就能正常覆盖安装：
 
 ## 维护说明
 
-补丁通过 `git apply` 施加在上游 tag 的源码上。上游若改动同一批文件，构建会
-**直接失败**而不是静默产出坏包——这时需要同步更新 `patches/`。
+### 补丁基线（重要）
+
+`patches/*.patch` 是对着 **`upstream-tag` 文件里记录的那个上游 tag** 生成的整体 diff，
+所以一定能干净应用到该 tag。workflow 默认构建上游**最新 release**；
+若最新 tag 与基线不同，构建会用 `git apply --3way` 做三方合并并在日志里给出警告。
+`--3way` 需要 base blob，因此 workflow 用 **git clone** 而不是 tarball。
+
+早期版本这里犯过一个真实错误：补丁是对着上游 `main` 分支生成的，而 workflow 构建的是
+最新 release tag，两棵树内容不同，导致**每个补丁都静默失败**，任务卡在
+"Confirm the patch set landed"。所以现在：
+
+- `upstream-tag` 是唯一的事实来源
+- `tools/verify-all.mjs` 也用同一个 tag 校验，和 CI 一致
+- `git apply` 失败会**直接让构建失败**，不会产出坏包
+
+### 升级到新的上游版本
+
+```bash
+# 1. 取到目标 tag
+git -C upstream fetch --depth 1 origin refs/tags/<newtag>:refs/tags/<newtag>
+
+# 2. 在干净工作树上重建补丁
+git -C upstream worktree add --detach ../.tag <newtag>
+#    把改动移植进 ../.tag（可先用 git apply --3way 应用旧补丁，再人工核对）
+
+# 3. 重新生成补丁并更新基线
+git -C ../.tag diff HEAD --output=patches/01-credentials-and-gating.patch -- <files...>
+#    ...02、03 同理
+#    然后修改 upstream-tag 文件
+
+# 4. 校验
+node tools/verify-all.mjs
+```
+
+### 本地校验
 
 改动补丁后，建议先在本地跑一遍不需要 Flutter 的校验（工作区根目录执行）：
 
 ```bash
 # 全量校验：workflow 结构、换行符、占位符、凭证注入两条路径、
-# 真实 API 凭证、补丁能否干净应用、gradle 签名改写
+# 真实 API 凭证、补丁能否干净应用到基线 tag、gradle 签名改写
 node tools/verify-all.mjs
 
 # 只跑离线检查（跳过真实 API 调用）
