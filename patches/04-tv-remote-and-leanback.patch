@@ -36,10 +36,17 @@ index 8dbe3c0..86b81cc 100644
      <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
      <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 diff --git a/lib/app_widget.dart b/lib/app_widget.dart
-index 288d7f0..2ee0bb4 100644
+index 288d7f0..49cc94b 100644
 --- a/lib/app_widget.dart
 +++ b/lib/app_widget.dart
-@@ -16,6 +16,7 @@ import 'package:kazumi/navigation.dart';
+@@ -1,5 +1,6 @@
+ import 'dart:io';
+ import 'package:flutter/material.dart';
++import 'package:flutter/services.dart';
+ import 'package:flutter_localizations/flutter_localizations.dart';
+ import 'package:flutter_modular/flutter_modular.dart';
+ import 'package:dynamic_color/dynamic_color.dart';
+@@ -16,6 +17,7 @@ import 'package:kazumi/navigation.dart';
  import 'package:kazumi/utils/constants.dart';
  import 'package:kazumi/utils/device.dart';
  import 'package:kazumi/utils/theme.dart';
@@ -47,7 +54,7 @@ index 288d7f0..2ee0bb4 100644
  
  class AppWidget extends StatefulWidget {
    const AppWidget({super.key});
-@@ -141,7 +142,7 @@ class _AppWidgetState extends State<AppWidget>
+@@ -141,7 +143,7 @@ class _AppWidgetState extends State<AppWidget>
      Color? color,
      ColorScheme? colorScheme,
    }) {
@@ -56,7 +63,7 @@ index 288d7f0..2ee0bb4 100644
        useMaterial3: true,
        fontFamily: fontFamily,
        brightness: brightness,
-@@ -151,6 +152,9 @@ class _AppWidgetState extends State<AppWidget>
+@@ -151,6 +153,9 @@ class _AppWidgetState extends State<AppWidget>
        sliderTheme: sliderTheme2024,
        pageTransitionsTheme: pageTransitionsTheme2024,
      );
@@ -66,7 +73,7 @@ index 288d7f0..2ee0bb4 100644
    }
  
    void _syncWindowsTitleBarBrightness(ThemeProvider themeProvider) {
-@@ -301,20 +305,33 @@ class _AppWidgetState extends State<AppWidget>
+@@ -301,20 +306,33 @@ class _AppWidgetState extends State<AppWidget>
              ? oledDarkTheme(dynamicDarkTheme)
              : dynamicDarkTheme;
  
@@ -114,7 +121,7 @@ index 288d7f0..2ee0bb4 100644
          );
        },
      );
-@@ -322,3 +339,60 @@ class _AppWidgetState extends State<AppWidget>
+@@ -322,3 +340,62 @@ class _AppWidgetState extends State<AppWidget>
      return app;
    }
  }
@@ -156,7 +163,9 @@ index 288d7f0..2ee0bb4 100644
 +  }
 +
 +  KeyEventResult _onKey(KeyEvent event) {
-+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
++    // No event-type check on purpose: it would require importing
++    // flutter/services.dart for KeyDownEvent, and the activation key simply does
++    // not appear in the event stream as anything else.
 +    if (!TvSupport.isUnmappedActivateKey(event.logicalKey)) {
 +      return KeyEventResult.ignored;
 +    }
